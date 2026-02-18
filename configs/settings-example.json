@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "/Users/YOUR_USERNAME/.claude/scripts/playwright-auto.sh",
+      "args": []
+    }
+  }
+}
