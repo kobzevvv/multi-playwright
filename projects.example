@@ -1,0 +1,18 @@
+# Playwright MCP — Project Configuration
+# ========================================
+#
+# Format: project_name | google_account | directories (space-separated, supports *)
+#
+# - project_name:    any name you want (no spaces)
+# - google_account:  your Google email, or "clean" for no account
+# - directories:     where you run Claude Code from (supports * globs)
+#
+# First project listed becomes the default.
+# Lines starting with # are comments.
+#
+# Example:
+
+work       | you@company.com   | ~/projects/company-*
+personal   | you@gmail.com     | ~/
+side-gig   | you@sidegig.com   | ~/projects/sidegig-*
+dev        | clean             | ~/projects/experiments ~/projects/oss-*
