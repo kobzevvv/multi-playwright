@@ -1,115 +1,158 @@
 # Playwright MCP Multi-Session Guide
 
-> How to run multiple AI coding sessions (Claude Code, Cursor, etc.) with browser automation — without them fighting over the same Chrome instance.
+> How to run multiple AI coding sessions (Claude Code, Cursor, etc.) with browser automation — without them fighting over the same Chrome instance. Supports **multiple projects with different Google accounts**.
 
 ## The Problem
 
-You're using [Playwright MCP](https://github.com/anthropics/anthropic-quickstarts/tree/main/mcp-playwright) to give your AI assistant browser access. It works great — until you open a second session:
+You're using [Playwright MCP](https://github.com/microsoft/playwright-mcp) to give your AI assistant browser access. It works great — until:
 
-```
-Error: Failed to launch the browser process
-browserType.launchPersistentContext: Profile already in use
-```
-
-**Why?** Chrome locks its `user-data-dir` at the process level. Two Playwright instances can't share the same Chrome profile simultaneously.
-
-**And if you need authenticated sessions** (Google Sheets, Webflow, internal tools), a clean/disposable browser isn't an option — you need persistent profiles with saved logins.
+1. **You open a second session** → `Profile already in use`
+2. **You work on multiple projects** with different Google accounts → wrong account, mixed cookies
+3. **Your personal Chrome** and the AI's Chrome interfere with each other
 
 ## The Solution
 
-An **auto-launcher script** that gives each session its own Chrome instance on a unique port:
+A **project-aware launcher** that maps each project to its own Chrome instance with the right account:
 
 ```
-Session A starts → Chrome on port 9223 (user-data-dir A)
-Session B starts → port 9223 busy → Chrome on port 9224 (user-data-dir B)
-Session C starts → both busy → connects to Chrome B via CDP (shares tabs)
+┌─────────────────────────────────────────────────────────────────┐
+│                     chrome-profiles.json                        │
+│  "work"     → port 9223, ~/.chrome-pw-work,     you@company    │
+│  "personal" → port 9224, ~/.chrome-pw-personal,  you@gmail     │
+│  "dev"      → port 9225, ~/.chrome-pw-dev,       (clean)       │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+           playwright-project.sh reads config
+                           │
+        ┌──────────────────┼──────────────────┐
+        ▼                  ▼                  ▼
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│ Chrome (9223) │  │ Chrome (9224) │  │ Chrome (9225) │
+│ Work account  │  │ Personal acct │  │ Clean browser │
+│ Sheets, Ads   │  │ Gmail, Docs   │  │ Dev tools     │
+└───────┬───────┘  └───────┬───────┘  └───────┬───────┘
+        │                  │                  │
+┌───────┴───────┐  ┌───────┴───────┐  ┌───────┴───────┐
+│ Claude Code   │  │ Claude Code   │  │ Claude Code   │
+│ ~/work-proj/  │  │ ~/personal/   │  │ ~/dev-proj/   │
+└───────────────┘  └───────────────┘  └───────────────┘
 ```
 
-Within each session, use **multi-tab** (`browser_tabs`) to work with multiple sites simultaneously.
-
-```
-┌─────────────────────────┐    ┌─────────────────────────┐
-│  Chrome A (port 9223)   │    │  Chrome B (port 9224)   │
-│  Authenticated profile  │    │  Authenticated profile  │
-│  Tab 0: Google Sheets   │    │  Tab 0: Webflow         │
-│  Tab 1: Google Ads      │    │  Tab 1: Analytics       │
-└───────────┬─────────────┘    └───────────┬─────────────┘
-            │ CDP                          │ CDP
-┌───────────┴─────────────┐    ┌───────────┴─────────────┐
-│  AI Session A           │    │  AI Session B           │
-│  Playwright MCP         │    │  Playwright MCP         │
-└─────────────────────────┘    └─────────────────────────┘
-```
+Each Chrome instance is **fully independent** — different ports, different data dirs, different accounts. Your personal Chrome (launched from the Dock) is not affected at all.
 
 ## Quick Setup
 
-### 1. Create the auto-launcher script
+### 1. Create the profile registry
 
-```bash
-mkdir -p ~/.claude/scripts
-cp scripts/playwright-auto.sh ~/.claude/scripts/
-chmod +x ~/.claude/scripts/playwright-auto.sh
-```
-
-Or create it manually — see [`scripts/playwright-auto.sh`](scripts/playwright-auto.sh).
-
-### 2. Create Chrome configs
+Copy and edit to match your projects:
 
 ```bash
 mkdir -p ~/.claude/configs
-cp configs/playwright-chrome-A.json ~/.claude/configs/
-cp configs/playwright-chrome-B.json ~/.claude/configs/
+cp configs/chrome-profiles-example.json ~/.claude/chrome-profiles.json
+# Edit ~/.claude/chrome-profiles.json with your projects/accounts
 ```
 
-### 3. Update MCP settings
-
-In your `~/.claude/settings.json` (or equivalent MCP config), replace the Playwright server entry:
-
+Example `chrome-profiles.json`:
 ```json
 {
-  "mcpServers": {
-    "playwright": {
-      "command": "/path/to/your/.claude/scripts/playwright-auto.sh",
-      "args": []
+  "default": "work",
+  "profiles": {
+    "work": {
+      "port": 9223,
+      "userDataDir": "~/.chrome-pw-work",
+      "account": "you@company.com",
+      "note": "Work Google account"
+    },
+    "personal": {
+      "port": 9224,
+      "userDataDir": "~/.chrome-pw-personal",
+      "account": "you@gmail.com",
+      "note": "Personal account"
+    },
+    "dev": {
+      "port": 9225,
+      "userDataDir": "~/.chrome-pw-dev",
+      "account": null,
+      "note": "Clean browser for testing"
     }
   }
 }
 ```
 
-**For Cursor / other editors** — adjust the MCP config path per your editor's documentation.
-
-### 4. First-time setup for Chrome B
-
-The second Chrome instance (`~/.chrome-playwright-2`) starts with a clean profile. You need to log in to your accounts **once**:
+### 2. Install the launcher script
 
 ```bash
-# Launch Chrome B manually to log in
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9224 \
-  --profile-directory="Profile 30" \
-  --user-data-dir=$HOME/.chrome-playwright-2
+mkdir -p ~/.claude/scripts
+cp scripts/playwright-project.sh ~/.claude/scripts/
+chmod +x ~/.claude/scripts/playwright-project.sh
 ```
 
-Log in to Google, Webflow, etc. Close it. Done — sessions persist.
+### 3. Configure MCP (global default)
+
+In `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "~/.claude/scripts/playwright-project.sh",
+      "args": ["work"]
+    }
+  }
+}
+```
+
+This sets the **default** project. Sessions started from any directory will use this unless overridden.
+
+### 4. Override per project directory
+
+Create project-level settings so Claude Code auto-selects the right Chrome:
+
+```bash
+# For personal projects started from ~/
+# File: ~/.claude/projects/-Users-YOU/settings.json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "~/.claude/scripts/playwright-project.sh",
+      "args": ["personal"]
+    }
+  }
+}
+```
+
+Claude Code encodes directory paths by replacing `/` with `-` and prepending `-`:
+- `/Users/you/work/project-a/` → `~/.claude/projects/-Users-you-work-project-a/settings.json`
+- `/Users/you/` → `~/.claude/projects/-Users-you/settings.json`
+
+### 5. First-time login per Chrome instance
+
+Each new Chrome instance starts clean. Log in to your accounts **once**:
+
+```bash
+# Launch Chrome for "personal" profile manually
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9224 \
+  --user-data-dir=$HOME/.chrome-pw-personal
+```
+
+Log in to Google, close Chrome. The session persists permanently.
 
 ## How It Works
 
-### Auto-launcher logic
+### Launcher logic
 
 ```
 START
-  ├─ Port 9223 free? → Launch Chrome A → Done
-  ├─ Port 9223 busy, 9224 free? → Launch Chrome B → Done
-  └─ Both busy? → Connect to Chrome B via CDP → Done
+  ├─ Read project name from: arg > $CHROME_PROJECT env > config default
+  ├─ Look up port + userDataDir from chrome-profiles.json
+  ├─ Port free? → Launch new Chrome → Done
+  └─ Port busy? → Connect via CDP (another session already running) → Done
 ```
-
-The script uses `curl` to check if a port responds to CDP (`/json/version`). Takes ~1 second.
-
-Key detail: the script uses `exec` to replace itself with the MCP process, so stdin/stdout pass through cleanly for JSON-RPC communication.
 
 ### Multi-tab within a session
 
-Each session can manage multiple browser tabs without conflicts:
+Each session can manage multiple browser tabs:
 
 ```
 browser_tabs → action: list              # see all tabs
@@ -118,95 +161,74 @@ browser_tabs → action: select, index: 0  # switch to tab
 browser_tabs → action: close, index: 1   # close tab
 ```
 
-Switching tabs preserves the full page context (DOM, scroll position, form state).
+Switching tabs preserves full page context.
 
-### Your personal Chrome is not affected
-
-Playwright Chrome and your regular Chrome are **completely independent**:
+### Personal Chrome is not affected
 
 | | Your Chrome | Playwright Chrome |
 |---|---|---|
-| Data dir | `~/Library/Application Support/Google/Chrome/` | `~/.chrome-playwright/` |
-| CDP port | None | 9223 / 9224 |
+| Data dir | `~/Library/Application Support/Google/Chrome/` | `~/.chrome-pw-*/` |
+| CDP port | None | 9223 / 9224 / 9225 |
 | Launched by | You (Dock icon) | Playwright MCP |
 | Affects the other? | No | No |
 
 ## Use Cases
 
-### Single session, multiple sites
-One AI session working with Google Sheets in tab 0 and a web app in tab 1:
-```
-→ browser_tabs: new
-→ browser_navigate: https://docs.google.com/spreadsheets/...
-→ (read data from sheets)
-→ browser_tabs: select index 1
-→ browser_navigate: https://app.example.com
-→ (paste data into web app)
-```
+### Multiple businesses, different Google accounts
+- **Company A** session → Chrome with `team@company-a.com` (Google Ads, Sheets)
+- **Company B** session → Chrome with `admin@company-b.com` (different Ads account)
+- **Personal** session → Chrome with `you@gmail.com` (personal docs, recruiting)
 
-### Two sessions, independent work
-- **Session A**: Managing Google Ads campaigns, reading spreadsheets
-- **Session B**: Editing Webflow site, deploying changes
+Each runs independently, correct account every time.
 
-Each has its own Chrome, own tabs, zero interference.
+### Two sessions, same project
+Both connect to the same Chrome via CDP, sharing tabs. Use `browser_tabs` to coordinate which tab each session uses.
 
-### Authenticated workflows
-Google Sheets, Google Ads, Webflow Designer, internal dashboards — all work because you're using persistent Chrome profiles with saved logins. No need to re-authenticate every session.
+### Clean browser for development
+A `dev` profile with no account — perfect for testing websites, debugging, experiments.
 
-## Configuration Reference
+## Adding a New Project
 
-### Files
-
-| File | Purpose |
-|------|---------|
-| `~/.claude/scripts/playwright-auto.sh` | Auto-selects free port and launches Chrome |
-| `~/.claude/configs/playwright-chrome-A.json` | Chrome A config: port 9223 |
-| `~/.claude/configs/playwright-chrome-B.json` | Chrome B config: port 9224 |
-| `~/.chrome-playwright/` | Chrome A data (persistent profile) |
-| `~/.chrome-playwright-2/` | Chrome B data (persistent profile) |
-
-### Chrome config format
-
+1. Add entry to `~/.claude/chrome-profiles.json`:
 ```json
-{
-  "browser": {
-    "launchOptions": {
-      "args": [
-        "--profile-directory=Profile 30",
-        "--remote-debugging-port=9223"
-      ]
-    }
-  }
+"new-project": {
+  "port": 9226,
+  "userDataDir": "~/.chrome-pw-newproject",
+  "account": "account@example.com",
+  "note": "Description"
 }
 ```
 
-- `--profile-directory`: Which Chrome profile to use within the user-data-dir
-- `--remote-debugging-port`: Fixed CDP port (otherwise Playwright picks a random one)
+2. Create project-level settings for relevant directories:
+```bash
+mkdir -p ~/.claude/projects/-Users-YOU-path-to-project
+echo '{"mcpServers":{"playwright":{"command":"~/.claude/scripts/playwright-project.sh","args":["new-project"]}}}' \
+  > ~/.claude/projects/-Users-YOU-path-to-project/settings.json
+```
 
-### Adding more sessions
-
-To support 3+ simultaneous sessions, extend the auto-launcher script with additional ports (9225, 9226, etc.) and user-data-dirs. See the script comments for the pattern.
+3. First launch → log in to accounts in the new Chrome window.
 
 ## Troubleshooting
 
 ### "Failed to launch browser" / Profile locked
-**Cause**: Another Chrome is using the same `user-data-dir`.
-**Fix**: The auto-launcher handles this. If it still fails, check for zombie Chrome processes:
+Another Chrome is using the same `user-data-dir`. Check for zombie processes:
 ```bash
-ps aux | grep "chrome-playwright" | grep -v grep
+ps aux | grep "chrome-pw" | grep -v grep
 ```
 
 ### MCP dies mid-session
-**Cause**: Chrome crashed, or someone killed it with `pkill`.
-**Fix**: Restart MCP (`/mcp` in Claude Code).
-**Prevention**: NEVER use `pkill -f "chrome-playwright"` — the pattern matches the MCP process path too! Use `kill <specific_PID>` instead.
+Chrome crashed or was killed. Restart: `/mcp` in Claude Code.
 
-### Second Chrome has no logins
-**Cause**: `~/.chrome-playwright-2` was created fresh.
-**Fix**: Launch Chrome B manually, log in once. See [First-time setup](#4-first-time-setup-for-chrome-b).
+**NEVER** use `pkill -f "chrome-pw"` — it matches the MCP process path too. Use `kill <specific_PID>`.
+
+### Wrong Google account
+Check which project your session is using:
+```bash
+# The launcher prints this to stderr on startup:
+# [playwright-project] Project: work | Port: 9223 | Dir: ~/.chrome-pw-work
+```
 
 ### Plugin override hijacks config
-Some MCP plugin systems (Claude Code plugins) can override your `settings.json` config. Check:
 ```bash
 # Should be {} (empty object)
 cat ~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/playwright/.mcp.json
@@ -214,19 +236,37 @@ cat ~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/play
 
 ### Diagnostic commands
 ```bash
-# Check both Chrome instances
-curl -s http://localhost:9223/json/version && echo "A: running" || echo "A: not running"
-curl -s http://localhost:9224/json/version && echo "B: running" || echo "B: not running"
+# Check all Chrome instances
+for port in 9223 9224 9225; do
+  curl -s --max-time 1 "http://localhost:$port/json/version" > /dev/null 2>&1 \
+    && echo "Port $port: running" || echo "Port $port: not running"
+done
 
-# List tabs in Chrome A
+# List tabs on a specific Chrome
 curl -s http://localhost:9223/json | python3 -c "
 import json, sys
 for t in json.load(sys.stdin):
     print(f'{t[\"title\"][:50]} — {t[\"url\"][:70]}')
 "
+```
 
-# MCP processes
-ps aux | grep "playwright-mcp\|playwright-auto" | grep -v grep
+## File Structure
+
+```
+~/.claude/
+├── chrome-profiles.json              # Project → Chrome mapping
+├── scripts/
+│   └── playwright-project.sh         # Smart launcher
+├── settings.json                     # Global MCP config (default project)
+└── projects/
+    ├── -Users-you-work-project/
+    │   └── settings.json             # Override: "work" project
+    └── -Users-you-personal/
+        └── settings.json             # Override: "personal" project
+
+~/.chrome-pw-work/                    # Chrome data for work
+~/.chrome-pw-personal/                # Chrome data for personal
+~/.chrome-pw-dev/                     # Chrome data for dev (clean)
 ```
 
 ## Compatibility
@@ -238,9 +278,9 @@ Tested with:
 - **Playwright MCP** `@playwright/mcp@latest`
 
 Should also work with:
-- **Cursor**, **Windsurf**, **VS Code + Continue** — any editor that supports MCP servers
-- **Linux** (adjust Chrome path in script)
-- **Windows** (needs .bat/PowerShell equivalent of the launcher)
+- **Cursor**, **Windsurf**, **VS Code + Continue** — any editor supporting MCP
+- **Linux** (adjust Chrome path in launch command)
+- **Windows** (needs PowerShell equivalent of the launcher)
 
 ## Contributing
 

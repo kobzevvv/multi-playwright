@@ -1,0 +1,23 @@
+{
+  "default": "work",
+  "profiles": {
+    "work": {
+      "port": 9223,
+      "userDataDir": "~/.chrome-pw-work",
+      "account": "you@company.com",
+      "note": "Work Google account — Sheets, Ads, internal tools"
+    },
+    "personal": {
+      "port": 9224,
+      "userDataDir": "~/.chrome-pw-personal",
+      "account": "you@gmail.com",
+      "note": "Personal Google account"
+    },
+    "dev": {
+      "port": 9225,
+      "userDataDir": "~/.chrome-pw-dev",
+      "account": null,
+      "note": "Clean browser for development and testing"
+    }
+  }
+}
