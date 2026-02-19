@@ -1,7 +1,0 @@
-{
-  "browser": {
-    "launchOptions": {
-      "args": ["--profile-directory=Profile 30", "--remote-debugging-port=9224"]
-    }
-  }
-}

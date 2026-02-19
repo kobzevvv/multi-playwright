@@ -11,11 +11,6 @@
 #   2. Env variable:    CHROME_PROJECT=skillset
 #   3. Default from chrome-profiles.json
 #
-# Setup:
-#   1. Edit ~/.claude/chrome-profiles.json to define your projects
-#   2. In ~/.claude/settings.json: "playwright": { "command": "this-script.sh", "args": ["project_name"] }
-#   3. Override per directory with project-level settings
-#
 # If the port is already busy (another session of the same project),
 # it connects via CDP instead of launching a new Chrome.
 # ============================================================================
@@ -64,8 +59,10 @@ else
   # Launch new Chrome instance
   mkdir -p "$USER_DATA_DIR"
 
-  # Create temp config with the port
-  TEMP_CONFIG=$(mktemp /tmp/playwright-chrome-XXXXXX.json)
+  # Create temp config with the port (macOS mktemp needs X's at end)
+  TEMP_CONFIG=$(mktemp /tmp/playwright-chrome-XXXXXX)
+  mv "$TEMP_CONFIG" "${TEMP_CONFIG}.json"
+  TEMP_CONFIG="${TEMP_CONFIG}.json"
   cat > "$TEMP_CONFIG" << CONF
 {
   "browser": {
